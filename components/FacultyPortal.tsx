@@ -18,6 +18,7 @@ const FacultyPortal: React.FC = () => {
     const { 
         students, timetable, attendance, activeSession, setActiveSession, logout, deleteStudent, markManualAttendance, 
         addTimetableEntry, updateTimetableEntry, deleteTimetableEntry, currentFaculty, updateFacultyProfile, deleteAttendanceRecord,
+        systemError, studentsError, timetableError, attendanceError
     } = useAppContext();
     const [view, setView] = useState<View>('dashboard');
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -138,37 +139,65 @@ const FacultyPortal: React.FC = () => {
         setView('attendance');
     };
 
+    const renderErrorBanner = (msg: string) => (
+        <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4 rounded shadow-sm relative">
+             <h3 className="font-bold text-sm">Data Fetch Error</h3>
+             <p className="text-sm">{msg}</p>
+        </div>
+    );
+
     const renderView = () => {
         switch (view) {
             case 'timetable':
-                return <TimetableManager 
-                    timetable={timetable}
-                    subjects={facultySubjects}
-                    currentFaculty={currentFaculty}
-                    addEntry={addTimetableEntry}
-                    updateEntry={updateTimetableEntry}
-                    deleteEntry={deleteTimetableEntry}
-                />;
-            case 'students':
-                return <StudentList students={students} deleteStudent={deleteStudent} onViewReport={handleViewStudentReport} />;
-            case 'attendance':
-                return <AttendanceReport 
-                            students={students} 
-                            attendance={facultyAttendance}
+                return (
+                    <>
+                        {timetableError && renderErrorBanner(timetableError)}
+                        <TimetableManager 
+                            timetable={timetable}
                             subjects={facultySubjects}
-                            selectedStudentId={selectedStudentForReport?.uid}
-                            onClearSelection={() => setSelectedStudentForReport(null)}
-                            deleteRecord={deleteAttendanceRecord}
-                        />;
+                            currentFaculty={currentFaculty}
+                            addEntry={addTimetableEntry}
+                            updateEntry={updateTimetableEntry}
+                            deleteEntry={deleteTimetableEntry}
+                        />
+                    </>
+                );
+            case 'students':
+                return (
+                    <>
+                        {studentsError && renderErrorBanner(studentsError)}
+                        <StudentList students={students} deleteStudent={deleteStudent} onViewReport={handleViewStudentReport} />
+                    </>
+                );
+            case 'attendance':
+                return (
+                    <>
+                        {attendanceError && renderErrorBanner(attendanceError)}
+                        <AttendanceReport 
+                                students={students} 
+                                attendance={facultyAttendance}
+                                subjects={facultySubjects}
+                                selectedStudentId={selectedStudentForReport?.uid}
+                                onClearSelection={() => setSelectedStudentForReport(null)}
+                                deleteRecord={deleteAttendanceRecord}
+                        />
+                    </>
+                );
             case 'profile':
                 return <FacultyProfile faculty={currentFaculty} updateProfile={updateFacultyProfile} />;
             case 'dashboard':
             default:
                 return (
-                    <div className="max-w-2xl mx-auto">
+                    <div className="max-w-2xl mx-auto space-y-6">
+                        {systemError && (
+                             <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded shadow-sm relative">
+                                <h3 className="font-bold">System Error</h3>
+                                <p className="text-sm">{systemError}</p>
+                            </div>
+                        )}
                         <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl w-full">
                             <h2 className="text-2xl font-bold text-cyan-500 dark:text-cyan-400 mb-4">Attendance Session</h2>
-                            {error && <p className="text-red-500 dark:text-red-400 mb-4">{error}</p>}
+                            {error && <p className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 p-3 rounded mb-4 text-sm">{error}</p>}
                             {activeSession ? (
                                 <div className="space-y-4">
                                     <div className="text-center p-4 bg-gray-100 dark:bg-gray-700 rounded-lg">
@@ -359,7 +388,8 @@ const TimetableManager: React.FC<{
     const [duration, setDuration] = useState(DEFAULT_CLASS_DURATION_MINS);
     const [editingEntry, setEditingEntry] = useState<TimetableEntry | null>(null);
     const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState('');
+    const [error, setError] = useState<string | null>('');
+    const [successMessage, setSuccessMessage] = useState<string | null>(null);
     const [scheduleStatus, setScheduleStatus] = useState({ currentClassId: null, nextClassId: null });
     const [viewedDay, setViewedDay] = useState<TimetableEntry['day']>(DAYS_OF_WEEK[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1]);
 
@@ -389,6 +419,9 @@ const TimetableManager: React.FC<{
     
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        setSuccessMessage(null);
+        setError(null);
+        
         if (!time || !subject || duration <= 0) {
             setError('Time, Subject, and a valid Duration are required.');
             return;
@@ -402,19 +435,56 @@ const TimetableManager: React.FC<{
             }
         }
 
+        // Check for overlaps
+        const timeToMinutes = (t: string) => {
+            const [h, m] = t.split(':').map(Number);
+            return h * 60 + m;
+        };
+
+        const newStart = timeToMinutes(time);
+        const newEnd = newStart + duration;
+        
+        // Filter entries for the same day, excluding the one being edited
+        const conflictingEntry = timetable.find(entry => {
+            if (entry.day !== day) return false;
+            if (editingEntry && entry.id === editingEntry.id) return false;
+            
+            const existStart = timeToMinutes(entry.time);
+            const existDuration = entry.duration || DEFAULT_CLASS_DURATION_MINS;
+            const existEnd = existStart + existDuration;
+
+            // Check if new interval overlaps with existing interval
+            return (newStart < existEnd && existStart < newEnd);
+        });
+
+        if (conflictingEntry) {
+            setError(`Conflict: This overlaps with "${conflictingEntry.subject}" at ${conflictingEntry.time}.`);
+            return;
+        }
+
         setIsLoading(true);
-        setError('');
         
         try {
             if (editingEntry) {
                 await updateEntry({ ...editingEntry, day, time, subject, duration });
+                setSuccessMessage("Timetable entry updated successfully.");
             } else {
                 await addEntry({ day, time, subject, duration });
+                setSuccessMessage("Timetable entry added successfully.");
             }
             resetForm();
-        } catch (err) {
-            setError('Failed to save entry. Please try again.');
-            console.error(err);
+        } catch (err: any) {
+            console.error("Timetable save error:", err);
+            // Better error handling to display the specific message thrown by the backend
+            let errorMessage = 'Failed to save entry. Please try again.';
+            if (err?.message) {
+                errorMessage = err.message;
+            } else if (typeof err === 'string') {
+                errorMessage = err;
+            } else if (err && typeof err === 'object' && 'message' in err) {
+                 errorMessage = String((err as any).message);
+            }
+            setError(errorMessage);
         } finally {
             setIsLoading(false);
         }
@@ -422,7 +492,9 @@ const TimetableManager: React.FC<{
     
     const handleEdit = (entry: TimetableEntry) => {
         setEditingEntry(entry);
-        setDay(entry.day);
+        setSuccessMessage(null);
+        setError(null);
+        setDay(entry.day as TimetableEntry['day']); // Cast to ensure type safety
         setTime(entry.time);
         setSubject(entry.subject);
         setDuration(entry.duration || DEFAULT_CLASS_DURATION_MINS);
@@ -430,10 +502,13 @@ const TimetableManager: React.FC<{
     };
 
     const handleDelete = async (id: string) => {
+        if(!window.confirm("Are you sure you want to delete this class?")) return;
+        setSuccessMessage(null);
         try {
             await deleteEntry(id);
-        } catch (err) {
-            alert('Failed to delete entry.');
+            setSuccessMessage("Class deleted successfully.");
+        } catch (err: any) {
+            alert(`Failed to delete entry: ${err.message}`);
             console.error(err);
         }
     };
@@ -453,6 +528,27 @@ const TimetableManager: React.FC<{
         <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl space-y-8">
             <div>
                 <h2 className="text-2xl font-bold text-cyan-500 dark:text-cyan-400 mb-4">{editingEntry ? 'Edit Timetable Entry' : 'Add New Timetable Entry'}</h2>
+                
+                {error && (
+                    <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4 rounded shadow-sm relative" role="alert">
+                        <p className="font-bold">Error</p>
+                        <p>{error}</p>
+                        <button onClick={() => setError(null)} className="absolute top-2 right-2 text-red-700 hover:text-red-900">
+                            <XIcon className="w-5 h-5" />
+                        </button>
+                    </div>
+                )}
+
+                {successMessage && (
+                    <div className="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 mb-4 rounded shadow-sm relative" role="alert">
+                        <p className="font-bold">Success</p>
+                        <p>{successMessage}</p>
+                        <button onClick={() => setSuccessMessage(null)} className="absolute top-2 right-2 text-green-700 hover:text-green-900">
+                            <XIcon className="w-5 h-5" />
+                        </button>
+                    </div>
+                )}
+
                 <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
                     <div className="flex flex-col">
                         <label htmlFor="day" className="mb-1 text-sm font-medium text-gray-500 dark:text-gray-400">Day</label>
@@ -489,7 +585,7 @@ const TimetableManager: React.FC<{
                         )}
                     </div>
                 </form>
-                {error && <p className="text-red-500 dark:text-red-400 mt-2 text-center">{error}</p>}
+                
                 {!editingEntry && !canAddMore && <p className="text-yellow-600 dark:text-yellow-500 mt-2 text-center">Cannot add more than 7 classes for {day}.</p>}
                 {subjects.length === 0 && <p className="text-yellow-600 dark:text-yellow-500 mt-2 text-center">You must have subjects assigned to your profile to add timetable entries.</p>}
             </div>
@@ -593,7 +689,9 @@ const TimetableManager: React.FC<{
 
 const StudentList: React.FC<{ students: Student[], deleteStudent: (uid: string) => Promise<void>, onViewReport: (student: Student) => void }> = ({ students, deleteStudent, onViewReport }) => {
     const handleDelete = (student: Student) => {
-        deleteStudent(student.uid);
+        if(window.confirm(`Are you sure you want to remove ${student.name}? This will delete all their attendance records.`)) {
+             deleteStudent(student.uid);
+        }
     }
     return (
     <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl">

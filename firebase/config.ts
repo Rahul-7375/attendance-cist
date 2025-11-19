@@ -1,6 +1,7 @@
+
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { getFirestore, setLogLevel } from "firebase/firestore";
 
 // Configuration provided by the user
 export const firebaseConfig = {
@@ -29,6 +30,10 @@ if (isConfigValid) {
         app = initializeApp(firebaseConfig);
         auth = getAuth(app);
         db = getFirestore(app);
+        
+        // Suppress verbose warnings about network streams which are common in some environments
+        setLogLevel('error');
+        
         firebaseInitialized = true;
     } catch (e) {
         console.error("Firebase initialization failed:", e);

@@ -4,7 +4,7 @@ import { firebaseConfig } from "../firebase/config.ts";
 
 // Do not initialize at the top level to prevent an app crash if the API_KEY is missing.
 let ai: GoogleGenAI | null = null;
-const MANUAL_KEY_STORAGE_KEY = 'gemini_manual_api_key';
+const MANUAL_KEY_STORAGE_KEY = 'AIzaSyAx3kyOqy3Zy2qjgKsK6Je7FYvKdI6gkKQ';
 
 export const setManualApiKey = (key: string) => {
     if (key && key.trim().length > 0) {

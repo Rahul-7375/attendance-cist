@@ -55,6 +55,10 @@ interface AppContextType {
   deleteAttendanceRecord: (id: string) => Promise<void>;
   deleteMultipleAttendanceRecords: (ids: string[]) => Promise<void>;
   deleteAllAttendanceRecords: () => Promise<void>;
+  systemError: string | null;
+  studentsError: string | null;
+  timetableError: string | null;
+  attendanceError: string | null;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -65,6 +69,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [currentStudent, setCurrentStudent] = useState<Student | null>(null);
   const [currentFaculty, setCurrentFaculty] = useState<Faculty | null>(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
+  const [systemError, setSystemError] = useState<string | null>(null);
+  
+  // Specific data errors to avoid global blocking
+  const [studentsError, setStudentsError] = useState<string | null>(null);
+  const [timetableError, setTimetableError] = useState<string | null>(null);
+  const [attendanceError, setAttendanceError] = useState<string | null>(null);
 
   const [students, setStudents] = useState<Student[]>([]);
   const [timetable, setTimetable] = useState<TimetableEntry[]>([]);
@@ -83,32 +93,39 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setCurrentUser(user);
       if (user) {
         // Fetch user role from Firestore
-        // FIX: Use Firestore v9 modular syntax for doc and getDoc.
-        const userDoc = await getDoc(doc(db!, 'users', user.uid));
-        if (userDoc.exists()) {
-          const role = (userDoc.data() as any)?.role;
-          setUserRole(role);
-          if (role === 'student') {
+        try {
             // FIX: Use Firestore v9 modular syntax for doc and getDoc.
-             const studentDoc = await getDoc(doc(db!, 'students', user.uid));
-             if(studentDoc.exists()) {
-                setCurrentStudent({ uid: user.uid, ...(studentDoc.data() as any) } as Student);
-             }
-             setCurrentFaculty(null);
-          } else if (role === 'faculty') {
-            // FIX: Use Firestore v9 modular syntax for doc and getDoc.
-            const facultyDoc = await getDoc(doc(db!, 'faculty', user.uid));
-            if (facultyDoc.exists()) {
-                setCurrentFaculty({ uid: user.uid, ...(facultyDoc.data() as any) } as Faculty);
+            const userDoc = await getDoc(doc(db!, 'users', user.uid));
+            if (userDoc.exists()) {
+            const role = (userDoc.data() as any)?.role;
+            setUserRole(role);
+            if (role === 'student') {
+                // FIX: Use Firestore v9 modular syntax for doc and getDoc.
+                const studentDoc = await getDoc(doc(db!, 'students', user.uid));
+                if(studentDoc.exists()) {
+                    setCurrentStudent({ uid: user.uid, ...(studentDoc.data() as any) } as Student);
+                }
+                setCurrentFaculty(null);
+            } else if (role === 'faculty') {
+                // FIX: Use Firestore v9 modular syntax for doc and getDoc.
+                const facultyDoc = await getDoc(doc(db!, 'faculty', user.uid));
+                if (facultyDoc.exists()) {
+                    setCurrentFaculty({ uid: user.uid, ...(facultyDoc.data() as any) } as Faculty);
+                }
+                setCurrentStudent(null);
+            } else {
+                setCurrentStudent(null);
+                setCurrentFaculty(null);
             }
-            setCurrentStudent(null);
-          } else {
-            setCurrentStudent(null);
-            setCurrentFaculty(null);
-          }
-        } else {
-            // Handle case where user exists in Auth but not in users collection
-            setUserRole(null); 
+            } else {
+                // Handle case where user exists in Auth but not in users collection
+                setUserRole(null); 
+            }
+        } catch (e: any) {
+            console.error("Error fetching user profile:", e);
+            if (e.code === 'permission-denied') {
+                setSystemError("Your account does not have permission to access user profiles. Please contact the administrator.");
+            }
         }
       } else {
         setUserRole(null);
@@ -120,15 +137,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return () => unsubscribe();
   }, []);
 
-  // Firestore listeners
+  // Data listeners
+  // We extract the department string to use as a dependency instead of the full object
+  // to prevent infinite loops when the object reference updates.
+  const userDepartment = userRole === 'faculty' ? currentFaculty?.department : currentStudent?.department;
+  // Use userId as a dependency instead of the mutable currentUser object to prevent churn
+  const userId = currentUser?.uid;
+
   useEffect(() => {
     // FIX: Add null check for db from Firebase config.
-    if (!currentUser || !db) {
+    if (!userId || !db) {
         setStudents([]);
         setAttendance([]);
         setTimetable([]);
         return;
     }
+
+    // Reset errors on dependency change to retry
+    setSystemError(null);
+    setStudentsError(null);
+    setTimetableError(null);
+    setAttendanceError(null);
 
     const sortTimetable = (timetableData: TimetableEntry[]) => {
         const daysOfWeekOrder: TimetableEntry['day'][] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -141,60 +170,73 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         return timetableData;
     };
 
+    const handleSnapshotError = (err: any, context: 'students' | 'timetable' | 'attendance' | 'student attendance') => {
+        console.error(`Error fetching ${context}:`, err);
+        // Only set specific errors for data fetch issues, do not block the whole app with systemError
+        if (err.code === 'permission-denied') {
+            const msg = `Permission denied: Unable to load ${context}. Check your account permissions.`;
+            if (context === 'students') setStudentsError(msg);
+            else if (context === 'timetable') setTimetableError(msg);
+            else if (context === 'attendance' || context === 'student attendance') setAttendanceError(msg);
+        }
+    };
+
     let unsubTimetable: (() => void) | undefined;
     let unsubAttendance: (() => void) | undefined;
     let unsubStudents: (() => void) | undefined;
     let unsubFaculty: (() => void) | undefined;
     
-    const userDepartment = userRole === 'faculty' ? currentFaculty?.department : currentStudent?.department;
-
     if (userDepartment) {
         // FIX: Use Firestore v9 modular syntax for query and onSnapshot.
          const timetableQuery = query(collection(db!, 'timetable'), where('department', '==', userDepartment));
          unsubTimetable = onSnapshot(timetableQuery, (snapshot: QuerySnapshot<DocumentData>) => {
                 const timetableData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TimetableEntry));
                 setTimetable(sortTimetable(timetableData));
-            }, err => {
-                console.error("Error fetching department timetable:", err);
-                setTimetable([]);
-            });
+            }, err => handleSnapshotError(err, 'timetable'));
     } else {
         setTimetable([]);
     }
 
     if (userRole === 'faculty') {
-        if (currentFaculty?.department) {
+        if (userDepartment) {
             // FIX: Use Firestore v9 modular syntax for query and onSnapshot.
-            const studentsQuery = query(collection(db!, 'students'), where('department', '==', currentFaculty.department));
+            const studentsQuery = query(collection(db!, 'students'), where('department', '==', userDepartment));
             unsubStudents = onSnapshot(studentsQuery, (snapshot: QuerySnapshot<DocumentData>) => {
                     const studentData = snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as Student));
                     setStudents(studentData);
-                });
+                }, err => handleSnapshotError(err, 'students'));
         }
 
         // FIX: Use Firestore v9 modular syntax for query and onSnapshot.
-        const attendanceQuery = query(collection(db!, 'attendance'), orderBy('date', 'desc'));
-        unsubAttendance = onSnapshot(attendanceQuery, (snapshot: QuerySnapshot<DocumentData>) => {
-            const attendanceData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AttendanceRecord));
-            setAttendance(attendanceData);
-        });
+        try {
+            const attendanceQuery = query(collection(db!, 'attendance'), orderBy('date', 'desc'));
+            unsubAttendance = onSnapshot(attendanceQuery, (snapshot: QuerySnapshot<DocumentData>) => {
+                const attendanceData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AttendanceRecord));
+                setAttendance(attendanceData);
+            }, (err) => handleSnapshotError(err, 'attendance'));
+        } catch(e) {
+            console.error("Error creating attendance query:", e);
+        }
         
+        // Profile listener
         // FIX: Use Firestore v9 modular syntax for onSnapshot and doc.
-        unsubFaculty = onSnapshot(doc(db!, 'faculty', currentUser.uid), docSnap => {
+        // Use userId for stability
+        unsubFaculty = onSnapshot(doc(db!, 'faculty', userId), docSnap => {
             if (docSnap.exists()) {
-                setCurrentFaculty({ uid: docSnap.id, ...(docSnap.data() as any) } as Faculty);
+                // We only update if there's a meaningful change to avoid loops, 
+                // but the dependency array fix (using userDepartment string) handles the main loop.
+                setCurrentFaculty(prev => ({ ...prev, uid: docSnap.id, ...(docSnap.data() as any) } as Faculty));
             }
-        });
+        }, err => console.error("Error fetching faculty profile update", err));
     } else if (userRole === 'student') {
         // FIX: Use Firestore v9 modular syntax for query and onSnapshot.
-        const attendanceQuery = query(collection(db!, 'attendance'), where('studentId', '==', currentUser.uid));
+        // Use userId for stability
+        const attendanceQuery = query(collection(db!, 'attendance'), where('studentId', '==', userId));
         unsubAttendance = onSnapshot(attendanceQuery, (snapshot: QuerySnapshot<DocumentData>) => {
                 const attendanceData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AttendanceRecord));
                 attendanceData.sort((a, b) => b.date.localeCompare(a.date));
                 setAttendance(attendanceData);
-            }, err => {
-                console.error("Error fetching student attendance:", err);
-            });
+            }, err => handleSnapshotError(err, 'student attendance'));
     }
 
     return () => {
@@ -203,7 +245,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         if (unsubStudents) unsubStudents();
         if (unsubFaculty) unsubFaculty();
     };
-}, [currentUser, userRole, currentStudent, currentFaculty]);
+    // Crucial Fix: Depend on `userDepartment` string and `userId` string instead of objects to prevent infinite loops and churn.
+  }, [userId, userRole, userDepartment]);
 
 
   const signUp = async (email: string, password: string, role: 'student' | 'faculty', details: any) => {
@@ -316,35 +359,97 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
   
   const addTimetableEntry = async (entry: Omit<TimetableEntry, 'id' | 'facultyId' | 'facultyName' | 'department'>) => {
-    // FIX: Add null check as db can be null if Firebase is not configured.
-    if (!currentUser || !currentFaculty?.department || !db) throw new Error("Faculty user, department, or DB not properly loaded.");
+    if (!db) throw new Error("Database connection not available. Please reload the app.");
+    if (!currentUser) throw new Error("Authentication error: You must be logged in.");
+    if (!currentFaculty) throw new Error("Faculty profile not loaded. Please refresh.");
+    
+    // Strict validation for department
+    if (!currentFaculty.department) {
+        throw new Error("Configuration error: Your department is not set. Please update your profile.");
+    }
+    
+    const sanitizedDuration = Number(entry.duration) || 45;
+
+    // FIX: Explicitly construct the object to avoid undefined fields which crash Firestore
     const newEntry = {
-        ...entry,
+        day: entry.day || 'Monday',
+        time: entry.time,
+        subject: entry.subject,
+        duration: sanitizedDuration,
         department: currentFaculty.department,
         facultyId: currentUser.uid,
-        facultyName: currentFaculty.name,
+        facultyName: currentFaculty.name || 'Unknown Faculty',
     };
-    // FIX: Use Firestore v9 modular syntax for addDoc and collection.
-    await addDoc(collection(db, 'timetable'), newEntry);
+
+    if(!newEntry.time || !newEntry.subject) {
+        throw new Error("Missing required fields: Time or Subject.");
+    }
+    
+    try {
+        // FIX: Ensure collection reference is valid
+        const timetableRef = collection(db, 'timetable');
+        await addDoc(timetableRef, newEntry);
+    } catch (e: any) {
+        console.error("Firestore addDoc error (timetable):", e);
+        const message = e.message || e.toString();
+        // If it's a permission error, provide a clearer message
+        if (e.code === 'permission-denied') {
+             throw new Error("Permission denied: You do not have access to modify the timetable.");
+        }
+        throw new Error(`Database Error: ${message}`);
+    }
   };
 
   const updateTimetableEntry = async (entry: TimetableEntry) => {
-    // FIX: Add null check as db can be null if Firebase is not configured.
-    if (!db) throw new Error("Firebase not initialized.");
+    if (!db) throw new Error("Database not initialized.");
+    
     const { id, ...data } = entry;
-    if ((!data.facultyId || !data.facultyName) && currentUser && currentFaculty) {
-        data.facultyId = currentUser.uid;
-        data.facultyName = currentFaculty.name;
+    
+    // Validate data before update to prevent undefined
+    if (!data.day || !data.time || !data.subject) {
+         throw new Error("Invalid data: Day, Time and Subject are required.");
     }
-    // FIX: Use Firestore v9 modular syntax for updateDoc and doc.
-    await updateDoc(doc(db, 'timetable', id), data);
+
+    const updateData: any = {
+        day: data.day,
+        time: data.time,
+        subject: data.subject,
+        duration: Number(data.duration) || 45
+    };
+    
+    // Only update faculty info if it exists in the incoming object or backfill
+    if (data.facultyId) updateData.facultyId = data.facultyId;
+    if (data.facultyName) updateData.facultyName = data.facultyName;
+
+    // Ensure proper backfilling of faculty info if missing, but only if current user is valid
+    if ((!updateData.facultyId || !updateData.facultyName) && currentUser && currentFaculty) {
+        updateData.facultyId = currentUser.uid;
+        updateData.facultyName = currentFaculty.name;
+    }
+    
+    try {
+        await updateDoc(doc(db, 'timetable', id), updateData);
+    } catch (e: any) {
+        console.error("Firestore updateDoc error (timetable):", e);
+        if (e.code === 'permission-denied') {
+            throw new Error("Permission denied: You do not have access to update this timetable entry.");
+        }
+        throw new Error(`Update Failed: ${e.message}`);
+    }
   };
 
   const deleteTimetableEntry = async (id: string) => {
     // FIX: Add null check as db can be null if Firebase is not configured.
     if (!db) throw new Error("Firebase not initialized.");
-    // FIX: Use Firestore v9 modular syntax for deleteDoc and doc.
-    await deleteDoc(doc(db, 'timetable', id));
+    try {
+        // FIX: Use Firestore v9 modular syntax for deleteDoc and doc.
+        await deleteDoc(doc(db, 'timetable', id));
+    } catch (e: any) {
+         if (e.code === 'permission-denied') {
+            throw new Error("Permission denied: You do not have access to delete this timetable entry.");
+        }
+        throw e;
+    }
   };
   
   const updateStudentProfile = async (details: Partial<Omit<Student, 'uid' | 'email' | 'department' | 'subjects'>>) => {
@@ -477,6 +582,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     deleteAttendanceRecord,
     deleteMultipleAttendanceRecords,
     deleteAllAttendanceRecords,
+    systemError,
+    studentsError,
+    timetableError,
+    attendanceError,
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
