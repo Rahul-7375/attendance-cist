@@ -1,0 +1,8 @@
+{
+  "name": "Attendance System",
+  "description": "A QR-based smart attendance system with geolocation and AI face verification. It includes separate portals for students and faculty, timetable management, and detailed attendance tracking.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}
