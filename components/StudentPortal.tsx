@@ -360,8 +360,12 @@ const AttendanceDashboard: React.FC<{ user: Student; timetable: TimetableEntry[]
             const errorMessage = err.message || "";
             
             // Special handling for API Key errors to allow user to input one
-            if (errorMessage.includes('API key not valid') || errorMessage.includes('API_KEY_INVALID')) {
-                setStatus('Configuration Error: Invalid API Key.');
+            if (
+                errorMessage.includes('API key not valid') || 
+                errorMessage.includes('API_KEY_INVALID') || 
+                errorMessage.includes('Gemini API key is not configured')
+            ) {
+                setStatus('Configuration Error: API Key missing or invalid.');
                 setShowApiKeyInput(true);
             } else {
                 setStatus(`Error: ${errorMessage}`);

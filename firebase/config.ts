@@ -3,15 +3,18 @@ import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore, setLogLevel } from "firebase/firestore";
 
-// Configuration provided by the user
+// Instructions:
+// 1. Go to https://aistudio.google.com/app/apikey
+// 2. Create a new API Key.
+// 3. Paste it below in the apiKey field.
+
 export const firebaseConfig = {
-  apiKey: "AIzaSyA8SheqW0UPLlxoI10JJ5mS15bFAOKHNhg",
-  authDomain: "smart-attendance04.firebaseapp.com",
-  projectId: "smart-attendance04",
-  storageBucket: "smart-attendance04.firebasestorage.app",
-  messagingSenderId: "321234604020",
-  appId: "1:321234604020:web:e4f7ce526b38e8c7be33a1",
-  measurementId: "G-CBSEMYFH51"
+  apiKey: "AIzaSyADydlgH4Fxmn9Hi0Pi8qdgX57YurvQ42M",
+  authDomain: "attendance-system-11.firebaseapp.com",
+  projectId: "attendance-system-11",
+  storageBucket: "attendance-system-11.firebasestorage.app",
+  messagingSenderId: "14882969392",
+  appId: "1:14882969392:web:09cddbf9fe8e8ec98e1af5"
 };
 
 let app = null;
@@ -23,6 +26,7 @@ let firebaseInitialized = false;
 const isConfigValid = 
     firebaseConfig &&
     firebaseConfig.apiKey &&
+    firebaseConfig.apiKey.length > 0 &&
     firebaseConfig.projectId;
 
 if (isConfigValid) {

@@ -4,7 +4,7 @@ import { firebaseConfig } from "../firebase/config.ts";
 
 // Do not initialize at the top level to prevent an app crash if the API_KEY is missing.
 let ai: GoogleGenAI | null = null;
-const MANUAL_KEY_STORAGE_KEY = 'AIzaSyAx3kyOqy3Zy2qjgKsK6Je7FYvKdI6gkKQ';
+const MANUAL_KEY_STORAGE_KEY = 'gemini_manual_api_key';
 
 export const setManualApiKey = (key: string) => {
     if (key && key.trim().length > 0) {
@@ -147,10 +147,13 @@ Your output must be a JSON object.`;
         
         // Clean potential markdown fences from the response
         if (jsonString.startsWith('```json')) {
-          jsonString = jsonString.substring(7);
+            jsonString = jsonString.substring(7);
+        } else if (jsonString.startsWith('```')) {
+            jsonString = jsonString.substring(3);
         }
+        
         if (jsonString.endsWith('```')) {
-          jsonString = jsonString.slice(0, -3);
+            jsonString = jsonString.slice(0, -3);
         }
         jsonString = jsonString.trim();
         
